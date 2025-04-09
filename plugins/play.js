@@ -1,5 +1,4 @@
-const { MessageMedia } = require('whatsapp-web.js');
-const { gmd } = require('../handler');
+const { gmd, MessageMedia } = require('../lib');
 const yts = require('yt-search');
 const axios = require('axios');
 
