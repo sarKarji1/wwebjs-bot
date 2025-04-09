@@ -1,3 +1,4 @@
+
 require('dotenv').config();
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const fs = require('fs');
@@ -48,13 +49,13 @@ function promptAuthMethod() {
     return new Promise((resolve) => {
         // Set 1-minute timeout
         const timeout = setTimeout(() => {
-            console.log('\n⏰ No selection made, defaulting to QR Code');
+            console.log('\n⏰ No Selection Made, Defaulting to QR Code');
             rl.close();
             resolve('qr');
         }, 60000);
 
         console.log('\nChoose Authentication Method:');
-        console.log('1. QR Code (Recommended)');
+        console.log('1. QR Code');
         console.log('2. Pairing Code');
         rl.question('Enter choice (1/2): ', (answer) => {
             clearTimeout(timeout);
@@ -70,23 +71,22 @@ function promptAuthMethod() {
 
 Gifted.on('qr', async (qr) => {
     if (pairingCodeRequested) return;
-    
-    // If auth method not chosen yet (no .env setting)
+
     if (!authMethod && !process.env.AUTH_TYPE) {
         authMethod = await promptAuthMethod();
     }
 
     if (authMethod === 'pairing' || process.env.AUTH_TYPE === 'pairing-code') {
-        console.log('\n🔑 Pairing code requested');
-        rl.question('Enter your phone number (with country code, e.g. 254712345678): ', async (phoneNumber) => {
+        console.log('\n🔑 Pairing Code Requested');
+        rl.question('Enter Your Phone Number (with country code, e.g. 254712345678): ', async (phoneNumber) => {
             try {
                 const pairingCode = await Gifted.requestPairingCode(phoneNumber);
                 console.log(`\nPairing code: ${pairingCode}`);
-                console.log('Enter this code in WhatsApp: Settings → Linked Devices');
+                console.log('Enter this Code in WhatsApp: Settings → Linked Devices');
                 pairingCodeRequested = true;
             } catch (error) {
-                console.error('\nError requesting pairing code:', error);
-                console.log('Falling back to QR code...');
+                console.error('\nError Requesting Pairing Code:', error);
+                console.log('Falling Back to QR code...');
                 showQrCode(qr);
             }
         });
@@ -100,13 +100,13 @@ function showQrCode(qr) {
     try {
         require('qrcode-terminal').generate(qr, { small: true });
     } catch (e) {
-        console.log('Scan this QR code with your phone:');
+        console.log('Scan this QR Code with Your Phone:');
         console.log(qr);
     }
 }
 
 Gifted.on('authenticated', () => {
-    console.log('\n🔑 Authenticated');
+    console.log('\n🔑 Logged In');
     cleanupReadline();
 });
 
@@ -116,7 +116,7 @@ Gifted.on('auth_failure', msg => {
 });
 
 Gifted.on('ready', () => {
-    console.log('\n🚀 Bot is ready!');
+    console.log('\n🚀 Bot is Online!');
     console.log(`🔣 Prefix: ${CONFIG.PREFIX}`);
     console.log(`🛠 Mode: ${CONFIG.BOT_MODE}`);
     console.log(`🔌 Auth Method: ${authMethod || process.env.AUTH_TYPE || 'qr-code'}`);
@@ -180,11 +180,11 @@ Gifted.on('message', async msg => {
       
       if (!isAllowed(msg)) {
           const modeMessages = {
-              "private": "🔒 This is a private bot",
-              "inbox-only": "📩 Bot only works in private chats",
-              "groups-only": "👥 Bot only works in groups"
+              "private": "🔒 Bot is Currentlt Private",
+              "inbox-only": "📩 Bot Only Works in Private Chats",
+              "groups-only": "👥 Bot Only Works in Groups"
           };
-          return await msg.reply(modeMessages[CONFIG.BOT_MODE] || "🚫 Command not allowed");
+          return await msg.reply(modeMessages[CONFIG.BOT_MODE] || "🚫 Command Not Allowed");
       }
 
       const cmd = getCommand(msg.body);
@@ -233,7 +233,7 @@ gmd({
 }, async (Gifted, msg, { args, reply }) => {
   if (!args[0]) return await reply(`Current prefix: ${CONFIG.PREFIX}`);
   CONFIG.PREFIX = args[0];
-  await reply(`✅ Command prefix changed to: ${CONFIG.PREFIX}`);
+  await reply(`✅ Command Prefix Changed to: ${CONFIG.PREFIX}`);
 });
 
 gmd({
@@ -250,7 +250,7 @@ gmd({
   }
   
   CONFIG.BOT_MODE = newMode;
-  await reply(`✅ Bot mode changed to: ${newMode}`);
+  await reply(`✅ Bot Mode Changed to: ${newMode}`);
 });
 
 Gifted.initialize();
