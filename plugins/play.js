@@ -1,9 +1,11 @@
-const { gmd, MessageMedia } = require('../lib');
+const { MessageMedia } = require('whatsapp-web.js');
+const { gmd } = require('../handler');
 const yts = require('yt-search');
 const axios = require('axios');
 
 gmd({
     pattern: "play",
+    fromMe: true,
     alias: ["song", "music"],
     desc: "Search and stream music from YouTube",
     category: "music",
@@ -13,7 +15,7 @@ gmd({
 async (Gifted, msg, { reply, from, args, q, react }) => {
     try {
         if (!q && (!args || args.length === 0)) {
-            return await reply("Please specify a song name!\nExample: !play Spectre");
+            return await reply("Please specify a song name!\nExample: .play Spectre");
         }
 
         const searchQuery = q || args.join(' ');
