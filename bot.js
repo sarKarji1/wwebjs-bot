@@ -1,7 +1,6 @@
-const { Client, LocalAuth } = require('whatsapp-web.js');
 const fs = require('fs');
 const path = require('path');
-const { gmd, commands } = require('./lib');
+const { gmd, commands, Client, LocalAuth,  } = require('./lib');
 
 const pluginsPath = path.join(__dirname, 'plugins');
 fs.readdirSync(pluginsPath).forEach((plugin) => {
