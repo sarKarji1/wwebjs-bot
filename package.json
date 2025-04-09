@@ -2,10 +2,10 @@
   "name": "wwebjs-bot",
   "version": "1.0.0",
   "description": "A WhatsApp Bot that Utilizes Wweb.js",
-  "main": "./bot.js",
+  "main": "./index.js",
   "scripts": {
-    "start": "node bot.js",
-    "dev": "nodemon bot.js",
+    "start": "node index.js",
+    "dev": "nodemon index.js",
     "test": "echo \"Error: no tests specified\" && exit 1"
   },
   "keywords": [
