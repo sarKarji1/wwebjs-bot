@@ -24,7 +24,7 @@ const CONFIG = {
 
 // .ENV
 const BOT_NUMBER = process.env.BOT_NUMBER || "254728782591";
-const OWNER_NUMBER = process.env.OWNER_NUMBER || "2547xxxxxxxx";
+const OWNER_NUMBER = process.env.OWNER_NUMBER || "254762016957";
 const AUTH_PATH = process.env.AUTH_PATH || './auth';
 const HEADLESS = process.env.HEADLESS !== 'true';
 
