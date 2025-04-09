@@ -1,4 +1,4 @@
-const { gmd } = require('../handler');
+const { gmd } = require('../lib');
 
 gmd({
     pattern: "ping",
