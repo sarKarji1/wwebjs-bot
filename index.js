@@ -1,7 +1,25 @@
+require('dotenv').config();
+const { Client, LocalAuth } = require('whatsapp-web.js');
 const fs = require('fs');
 const path = require('path');
-const { gmd, commands, Client, LocalAuth,  } = require('./lib');
+const readline = require('readline');
+const { gmd, commands } = require('./handler');
 
+// ===== CONFIGURATION =====
+const CONFIG = {
+    PREFIX: ".",
+    BOT_MODE: "private",
+    ALLOWED_GROUPS: process.env.ALLOWED_GROUPS ? process.env.ALLOWED_GROUPS.split(',') : [],
+    BLOCKED_USERS: process.env.BLOCKED_USERS ? process.env.BLOCKED_USERS.split(',') : []
+};
+
+// Environment variables
+const BOT_NUMBER = process.env.BOT_NUMBER || "2547xxxxxxxx";
+const OWNER_NUMBER = process.env.OWNER_NUMBER || "254762016957";
+const AUTH_PATH = process.env.AUTH_PATH || './auth';
+const HEADLESS = process.env.HEADLESS !== 'true';
+
+// ===== BOT SETUP =====
 const pluginsPath = path.join(__dirname, 'plugins');
 fs.readdirSync(pluginsPath).forEach((plugin) => {
     if (path.extname(plugin).toLowerCase() === ".js") {
@@ -10,65 +28,239 @@ fs.readdirSync(pluginsPath).forEach((plugin) => {
 });
 console.log('✅ Plugins Loaded:', commands.length);
 
-
 const Gifted = new Client({
-    authStrategy: new LocalAuth({ dataPath: './auth' }),
+    authStrategy: new LocalAuth({ dataPath: AUTH_PATH }),
     puppeteer: { 
-        headless: true,
+        headless: HEADLESS,
         args: ['--no-sandbox', '--disable-setuid-sandbox']
     }
 });
 
-Gifted.on('qr', (qr) => {
-    console.log('QR RECEIVED:', qr);
+// ===== AUTHENTICATION HANDLERS =====
+const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
 });
+let pairingCodeRequested = false;
+let authMethod = null;
 
-Gifted.on('authenticated', () => {
-    console.log('🔑 Authenticated');
-});
+function promptAuthMethod() {
+    return new Promise((resolve) => {
+        // Set 1-minute timeout
+        const timeout = setTimeout(() => {
+            console.log('\n⏰ No selection made, defaulting to QR Code');
+            rl.close();
+            resolve('qr');
+        }, 60000);
 
-Gifted.on('ready', () => {
-    console.log('🚀 Bot is ready!');
-    const adminNumber = "254762016957@c.us";
-    Gifted.sendMessage(adminNumber, '🤖 Bot Integrated!');
-});
-
-Gifted.on('message', async msg => {
-    try {
-        const text = msg.body;
-        if (text.startsWith('!')) {
-            const cmd = text.split(' ')[0].slice(1).toLowerCase();
-            const args = text.split(' ').slice(1);
-            const quoted = msg.hasQuotedMsg ? await msg.getQuotedMessage() : null;
-            
-            const command = commands.find(c => 
-                c.pattern.toLowerCase() === cmd || 
-                (c.alias && c.alias.includes(cmd)));
-            
-            if (command) {
-                // console.log(`Executing: ${command.pattern}`);
-
-                const isOwner = msg.from.replace(/@.*/, "") === "2547xxxxxxxx";
-                
-                const context = {
-                    from: msg.from,
-                    quoted,
-                    body: text,
-                    args,
-                    q: args.join(' '),
-                    pushname: msg._data.notifyName,
-                    isMe: msg.fromMe,
-                    isOwner,
-                    reply: (text) => msg.reply(text),
-                    react: (emoji) => msg.react(emoji)
-                };
-                
-                await command.function(Gifted, msg, context);
+        console.log('\nChoose Authentication Method:');
+        console.log('1. QR Code (Recommended)');
+        console.log('2. Pairing Code');
+        rl.question('Enter choice (1/2): ', (answer) => {
+            clearTimeout(timeout);
+            const choice = answer.trim();
+            if (choice === '2') {
+                resolve('pairing');
+            } else {
+                resolve('qr');
             }
-        }
-    } catch (error) {
-        console.error('Error:', error);
+        });
+    });
+}
+
+Gifted.on('qr', async (qr) => {
+    if (pairingCodeRequested) return;
+    
+    // If auth method not chosen yet (no .env setting)
+    if (!authMethod && !process.env.AUTH_TYPE) {
+        authMethod = await promptAuthMethod();
+    }
+
+    if (authMethod === 'pairing' || process.env.AUTH_TYPE === 'pairing-code') {
+        console.log('\n🔑 Pairing code requested');
+        rl.question('Enter your phone number (with country code, e.g. 254712345678): ', async (phoneNumber) => {
+            try {
+                const pairingCode = await Gifted.requestPairingCode(phoneNumber);
+                console.log(`\nPairing code: ${pairingCode}`);
+                console.log('Enter this code in WhatsApp: Settings → Linked Devices');
+                pairingCodeRequested = true;
+            } catch (error) {
+                console.error('\nError requesting pairing code:', error);
+                console.log('Falling back to QR code...');
+                showQrCode(qr);
+            }
+        });
+    } else {
+        showQrCode(qr);
     }
 });
 
+function showQrCode(qr) {
+    console.log('\nQR RECEIVED:');
+    try {
+        require('qrcode-terminal').generate(qr, { small: true });
+    } catch (e) {
+        console.log('Scan this QR code with your phone:');
+        console.log(qr);
+    }
+}
+
+Gifted.on('authenticated', () => {
+    console.log('\n🔑 Authenticated');
+    cleanupReadline();
+});
+
+Gifted.on('auth_failure', msg => {
+    console.error('\nAUTH FAILURE:', msg);
+    cleanupReadline();
+});
+
+Gifted.on('ready', () => {
+    console.log('\n🚀 Bot is ready!');
+    console.log(`🔣 Prefix: ${CONFIG.PREFIX}`);
+    console.log(`🛠 Mode: ${CONFIG.BOT_MODE}`);
+    console.log(`🔌 Auth Method: ${authMethod || process.env.AUTH_TYPE || 'qr-code'}`);
+    
+    Gifted.sendMessage(`${OWNER_NUMBER}@c.us`, 
+        `🤖 Bot is online!\n` +
+        `Prefix: ${CONFIG.PREFIX}\n` +
+        `Mode: ${CONFIG.BOT_MODE}`)
+        .catch(console.error);
+    
+    cleanupReadline();
+});
+
+function cleanupReadline() {
+    if (rl) {
+        rl.close();
+        rl.removeAllListeners();
+    }
+}
+
+// ===== UTILITY FUNCTIONS =====
+function isOwner(msg) {
+  return msg.from.replace(/@.*/, "") === OWNER_NUMBER;
+}
+
+function isBotSelf(msg) {
+  return msg.from.replace(/@.*/, "") === BOT_NUMBER;
+}
+
+function isGroup(msg) {
+  return msg.from.endsWith('@g.us');
+}
+
+function isAllowed(msg) {
+  const sender = msg.from.replace(/@.*/, "");
+  
+  if (CONFIG.BLOCKED_USERS.includes(sender)) return false;
+  if (isOwner(msg) || isBotSelf(msg)) return true;
+  
+  switch (CONFIG.BOT_MODE.toLowerCase()) {
+      case "public": return true;
+      case "private": return false;
+      case "inbox-only": return !isGroup(msg);
+      case "groups-only": return isGroup(msg);
+      default: return false;
+  }
+}
+
+function isCommand(text) {
+  return text.startsWith(CONFIG.PREFIX);
+}
+
+function getCommand(text) {
+  return text.slice(CONFIG.PREFIX.length).split(' ')[0].toLowerCase();
+}
+
+// ===== MESSAGE HANDLER =====
+Gifted.on('message', async msg => {
+  try {
+      if (msg.from === 'status@broadcast' || !isCommand(msg.body)) return;
+      
+      if (!isAllowed(msg)) {
+          const modeMessages = {
+              "private": "🔒 This is a private bot",
+              "inbox-only": "📩 Bot only works in private chats",
+              "groups-only": "👥 Bot only works in groups"
+          };
+          return await msg.reply(modeMessages[CONFIG.BOT_MODE] || "🚫 Command not allowed");
+      }
+
+      const cmd = getCommand(msg.body);
+      const args = msg.body.split(' ').slice(1);
+      const quoted = msg.hasQuotedMsg ? await msg.getQuotedMessage() : null;
+      
+      const command = commands.find(c => 
+          c.pattern.toLowerCase() === cmd || 
+          (c.alias && c.alias.includes(cmd)));
+      
+      if (command) {
+          console.log(`Executing: ${CONFIG.PREFIX}${command.pattern} from ${msg.from}`);
+          
+          const context = {
+              prefix: CONFIG.PREFIX,
+              from: msg.from,
+              quoted,
+              body: msg.body,
+              args,
+              q: args.join(' '),
+              pushname: msg._data.notifyName,
+              isMe: msg.fromMe,
+              isOwner: isOwner(msg),
+              isBot: isBotSelf(msg),
+              isGroup: isGroup(msg),
+              reply: (text) => msg.reply(text),
+              react: (emoji) => msg.react(emoji)
+          };
+          
+          await command.function(Gifted, msg, context);
+      }
+  } catch (error) {
+      console.error('Message Handler Error:', error);
+      Gifted.sendMessage(`${OWNER_NUMBER}@c.us`, 
+          `⚠️ Error: ${error.message}`)
+          .catch(console.error);
+  }
+});
+
+// ===== MANAGEMENT COMMANDS =====
+gmd({
+  pattern: "prefix",
+  fromMe: true,
+  desc: "Change command prefix",
+  usage: `${CONFIG.PREFIX}prefix <new_prefix>`
+}, async (Gifted, msg, { args, reply }) => {
+  if (!args[0]) return await reply(`Current prefix: ${CONFIG.PREFIX}`);
+  CONFIG.PREFIX = args[0];
+  await reply(`✅ Command prefix changed to: ${CONFIG.PREFIX}`);
+});
+
+gmd({
+  pattern: "mode",
+  fromMe: true,
+  desc: "Change bot mode",
+  usage: `${CONFIG.PREFIX}mode <public|private|inbox-only|groups-only>`
+}, async (Gifted, msg, { args, reply }) => {
+  const newMode = args[0]?.toLowerCase();
+  const validModes = ["public", "private", "inbox-only", "groups-only"];
+  
+  if (!newMode || !validModes.includes(newMode)) {
+      return await reply(`Current mode: ${CONFIG.BOT_MODE}\nValid modes: ${validModes.join(", ")}`);
+  }
+  
+  CONFIG.BOT_MODE = newMode;
+  await reply(`✅ Bot mode changed to: ${newMode}`);
+});
+
 Gifted.initialize();
+
+// Clean up on exit
+process.on('SIGINT', async () => {
+    console.log('\nShutting down...');
+    await Gifted.sendMessage(`${OWNER_NUMBER}@c.us`, '🛑 Bot shutting down')
+        .catch(console.error);
+    cleanupReadline();
+    await Gifted.destroy();
+    process.exit(0);
+});
