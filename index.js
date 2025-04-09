@@ -1,8 +1,17 @@
 require('dotenv').config();
+const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
-const { gmd, commands, Client, LocalAuth } = require('./lib');
+const qrcode = require('qrcode');
+const { gmd, commands, Client, LocalAuth, MessageMedia } = require('./lib');
+
+// ===== EXPRESS SERVER SETUP =====
+const app = express();
+const PORT = process.env.PORT || 8000;
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static('public'));
 
 // ===== CONFIGURATION =====
 const CONFIG = {
@@ -14,7 +23,7 @@ const CONFIG = {
 };
 
 // .ENV
-const BOT_NUMBER = process.env.BOT_NUMBER || "2547xxxxxxxx";
+const BOT_NUMBER = process.env.BOT_NUMBER || "254728782591";
 const OWNER_NUMBER = process.env.OWNER_NUMBER || "2547xxxxxxxx";
 const AUTH_PATH = process.env.AUTH_PATH || './auth';
 const HEADLESS = process.env.HEADLESS !== 'true';
@@ -43,7 +52,131 @@ const rl = readline.createInterface({
 });
 let pairingCodeRequested = false;
 let authMethod = null;
+let activeClient = null;
 
+// ===== WEB AUTHENTICATION ENDPOINTS =====
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.post('/api/qr', async (req, res) => {
+    try {
+        activeClient = new Client({
+            authStrategy: new LocalAuth({ dataPath: AUTH_PATH }),
+            puppeteer: { 
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
+        }
+        });
+
+        activeClient.on('qr', async (qr) => {
+            const qrImage = await qrcode.toDataURL(qr);
+            res.json({ success: true, qr: qrImage });
+        });
+
+        activeClient.on('authenticated', () => {
+            console.log('🔑 Web Authentication Successful');
+        });
+
+        activeClient.on('ready', () => {
+            console.log('🌐 Web Client Ready');
+            Gifted.emit('ready');
+        });
+
+        activeClient.initialize();
+    } catch (error) {
+        console.error('Web Auth Error:', error);
+        res.status(500).json({ success: false, error: 'Authentication failed' });
+    }
+});
+
+app.post('/api/pair', async (req, res) => {
+    const { phoneNumber } = req.body;
+    if (!phoneNumber || !/^\d{10,15}$/.test(phoneNumber)) {
+        return res.status(400).json({ 
+            success: false, 
+            error: 'Valid phone number required (10-15 digits)' 
+        });
+    }
+
+    try {
+        activeClient = new Client({
+            authStrategy: new LocalAuth({ dataPath: AUTH_PATH }),
+            puppeteer: { 
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
+        }
+        });
+
+        const pairingCode = await activeClient.requestPairingCode(phoneNumber);
+        
+        activeClient.on('ready', () => {
+            console.log('🌐 Paired Client Ready');
+            Gifted.emit('ready');
+        });
+
+        res.json({ success: true, pairingCode });
+        activeClient.initialize();
+    } catch (error) {
+        console.error('Pairing Error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Pairing failed. Ensure number is correct and WhatsApp is active on device.'
+        });
+    }
+});
+
+// ===== MESSAGE SENDING API =====
+app.post('/api/sendmessage', async (req, res) => {
+    const { number, message, type, mediaUrl, filename, caption } = req.body;
+    
+    if (!number || !/^\d{10,15}$/.test(number)) {
+        return res.status(400).json({ success: false, error: 'Invalid WhatsApp number' });
+    }
+
+    try {
+        const chatId = `${number}@c.us`;
+        
+        if (type === 'media' && mediaUrl) {
+            const media = await MessageMedia.fromUrl(mediaUrl, {
+                unsafeMime: true,
+                filename: filename || `file_${Date.now()}`
+            });
+            
+            await Gifted.sendMessage(chatId, media, { caption });
+            
+            // Set appropriate reaction based on file type
+            const extension = filename ? path.extname(filename).toLowerCase() : '';
+            const reactions = {
+                '.mp3': '🎧',
+                '.mp4': '🎬',
+                '.jpg': '🖼️',
+                '.png': '🖼️',
+                '.pdf': '📄',
+                '.doc': '📄',
+                '.docx': '📄',
+                '.xls': '📊',
+                '.xlsx': '📊',
+                '.zip': '🗄️'
+            };
+            
+            const reaction = reactions[extension] || '📎';
+            await Gifted.sendMessage(chatId, { react: { text: reaction, messageId: null }});
+            
+        } else if (message) {
+            await Gifted.sendMessage(chatId, message);
+        } else {
+            return res.status(400).json({ success: false, error: 'Message content required' });
+        }
+        
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Message Sending Error:', error);
+        res.status(500).json({ success: false, error: 'Failed to send message' });
+    }
+});
+
+// ===== TERMINAL AUTHENTICATION =====
 function promptAuthMethod() {
     return new Promise((resolve) => {
         const timeout = setTimeout(() => {
@@ -117,7 +250,7 @@ Gifted.on('ready', () => {
     Gifted.sendMessage(`${OWNER_NUMBER}@c.us`, 
         `🤖 Bot is online!\n` +
         `Prefix: ${CONFIG.PREFIX}\n` +
-        `Mode: ${CONFIG.BOT_MODE}`)  +
+        `Mode: ${CONFIG.BOT_MODE}\n` +
         `Auth Method: ${authMethod}`)
         .catch(console.error);
     
@@ -270,7 +403,11 @@ gmd({
     await reply(`✅ Bot Mode Changed to: ${newMode}`);
 });
 
-Gifted.initialize();
+// Start everything
+app.listen(PORT, () => {
+    console.log(`🌐 Web server running on port ${PORT}`);
+    Gifted.initialize();
+});
 
 // Clean up on exit
 process.on('SIGINT', async () => {
@@ -278,6 +415,7 @@ process.on('SIGINT', async () => {
     await Gifted.sendMessage(`${OWNER_NUMBER}@c.us`, '🛑 Bot shutting down')
         .catch(console.error);
     cleanupReadline();
+    if (activeClient) await activeClient.destroy();
     await Gifted.destroy();
     process.exit(0);
 });
