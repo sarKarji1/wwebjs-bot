@@ -40,7 +40,7 @@ console.log('✅ Plugins Loaded:', commands.length);
 const Gifted = new Client({
     authStrategy: new LocalAuth({ dataPath: AUTH_PATH }),
     puppeteer: { 
-        headless: HEADLESS,
+        headless: true,
         args: ['--no-sandbox', '--disable-setuid-sandbox']
     }
 });
