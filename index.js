@@ -37,12 +37,24 @@ fs.readdirSync(pluginsPath).forEach((plugin) => {
 });
 console.log('✅ Plugins Loaded:', commands.length);
 
+// ===== CLIENT SETUP =====
 const Gifted = new Client({
     authStrategy: new LocalAuth({ dataPath: AUTH_PATH }),
     puppeteer: { 
         headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
-    }
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--no-first-run',
+            '--no-zygote',
+            '--single-process',
+            '--disable-gpu'
+        ]
+    },
+    takeoverOnConflict: true,
+    restartOnAuthFail: true
 });
 
 // ===== AUTHENTICATION HANDLERS =====
@@ -52,7 +64,7 @@ const rl = readline.createInterface({
 });
 let pairingCodeRequested = false;
 let authMethod = null;
-let activeClient = null;
+let webClients = new Map();
 
 // ===== WEB AUTHENTICATION ENDPOINTS =====
 app.get('/', (req, res) => {
@@ -60,38 +72,83 @@ app.get('/', (req, res) => {
 });
 
 app.post('/api/qr', async (req, res) => {
+    const clientId = `web-qr-${Date.now()}`;
+    
     try {
-        activeClient = new Client({
-            authStrategy: new LocalAuth({ dataPath: AUTH_PATH }),
+        const client = new Client({
+            authStrategy: new LocalAuth({ clientId, dataPath: AUTH_PATH }),
             puppeteer: { 
-            headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
-        }
+                headless: true,
+                args: ['--no-sandbox', '--disable-setuid-sandbox']
+            }
         });
 
-        activeClient.on('qr', async (qr) => {
-            const qrImage = await qrcode.toDataURL(qr);
-            res.json({ success: true, qr: qrImage });
+        webClients.set(clientId, client);
+
+        client.on('qr', async (qr) => {
+            try {
+                const qrImage = await qrcode.toDataURL(qr);
+                res.json({ 
+                    success: true, 
+                    qr: qrImage,
+                    message: 'Scan the QR code with WhatsApp to authenticate. Session will be generated automatically.'
+                });
+            } catch (error) {
+                console.error('QR Generation Error:', error);
+                if (!res.headersSent) {
+                    res.status(500).json({ 
+                        success: false, 
+                        error: 'QR generation failed' 
+                    });
+                }
+                client.destroy().catch(console.error);
+                webClients.delete(clientId);
+            }
         });
 
-        activeClient.on('authenticated', () => {
-            console.log('🔑 Web Authentication Successful');
+        client.on('authenticated', () => {
+            console.log(`🔑 Client ${clientId} authenticated`);
         });
 
-        activeClient.on('ready', () => {
-            console.log('🌐 Web Client Ready');
-            Gifted.emit('ready');
+        client.on('ready', () => {
+            console.log(`🌐 Client ${clientId} ready`);
+            // Transfer session to main client
+            Gifted.initialize().catch(console.error);
+            client.destroy().catch(console.error);
+            webClients.delete(clientId);
         });
 
-        activeClient.initialize();
+        client.on('auth_failure', (msg) => {
+            console.error(`❌ Client ${clientId} auth failure:`, msg);
+            if (!res.headersSent) {
+                res.status(500).json({ 
+                    success: false, 
+                    error: 'Authentication failed' 
+                });
+            }
+            client.destroy().catch(console.error);
+            webClients.delete(clientId);
+        });
+
+        await client.initialize();
     } catch (error) {
         console.error('Web Auth Error:', error);
-        res.status(500).json({ success: false, error: 'Authentication failed' });
+        if (!res.headersSent) {
+            res.status(500).json({ 
+                success: false, 
+                error: 'Client initialization failed' 
+            });
+        }
+        webClients.get(clientId)?.destroy().catch(console.error);
+        webClients.delete(clientId);
     }
 });
 
+// ===== WEB AUTHENTICATION ENDPOINTS =====
 app.post('/api/pair', async (req, res) => {
     const { phoneNumber } = req.body;
+    const clientId = `web-pair-${Date.now()}`;
+    
     if (!phoneNumber || !/^\d{10,15}$/.test(phoneNumber)) {
         return res.status(400).json({ 
             success: false, 
@@ -100,81 +157,102 @@ app.post('/api/pair', async (req, res) => {
     }
 
     try {
-        activeClient = new Client({
-            authStrategy: new LocalAuth({ dataPath: AUTH_PATH }),
+        console.log(`Initializing client for pairing with ${phoneNumber}`);
+        const client = new Client({
+            authStrategy: new LocalAuth({ clientId, dataPath: AUTH_PATH }),
             puppeteer: { 
-            headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
-        }
+                headless: true,
+                args: [
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-accelerated-2d-canvas',
+                    '--no-first-run',
+                    '--no-zygote',
+                    '--single-process'
+                ],
+                executablePath: process.env.CHROME_PATH || undefined
+            }
         });
 
-        const pairingCode = await activeClient.requestPairingCode(phoneNumber);
+        webClients.set(clientId, client);
+
+        // Enhanced initialization with progress tracking
+        let isReady = false;
+        const initTimeout = 60000; // 60 seconds timeout
         
-        activeClient.on('ready', () => {
-            console.log('🌐 Paired Client Ready');
-            Gifted.emit('ready');
+        const initPromise = new Promise((resolve, reject) => {
+            // Track initialization progress
+            client.on('loading_screen', (percent, message) => {
+                console.log(`Loading: ${percent}% ${message || ''}`);
+            });
+
+            client.on('authenticated', () => {
+                console.log('🔑 Client authenticated');
+            });
+
+            client.on('auth_failure', msg => {
+                console.error('❌ Auth failure:', msg);
+                reject(new Error(`Authentication failed: ${msg}`));
+            });
+
+            client.on('ready', () => {
+                console.log('🌐 Client ready');
+                isReady = true;
+                resolve();
+            });
+
+            client.on('disconnected', (reason) => {
+                console.log('🔌 Client disconnected:', reason);
+                if (!isReady) {
+                    reject(new Error(`Client disconnected: ${reason}`));
+                }
+            });
         });
 
-        res.json({ success: true, pairingCode });
-        activeClient.initialize();
+        // Start initialization
+        await client.initialize();
+        console.log('Client initialization started...');
+
+        // Wait for ready state with timeout
+        await Promise.race([
+            initPromise,
+            new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Client initialization timeout')), initTimeout)
+            )
+        ]);
+
+        console.log('Client ready, requesting pairing code...');
+        const pairingCode = await client.requestPairingCode(phoneNumber);
+        console.log(`Pairing code generated for ${phoneNumber}`);
+
+        res.json({ 
+            success: true, 
+            pairingCode: pairingCode,
+            message: 'Enter this code in your WhatsApp linked devices section'
+        });
+
+        // Handle post-pairing
+        client.on('ready', () => {
+            console.log('🌐 Paired session ready');
+            Gifted.initialize().catch(console.error);
+            client.destroy().catch(console.error);
+            webClients.delete(clientId);
+        });
+
     } catch (error) {
-        console.error('Pairing Error:', error);
+        console.error('❌ Pairing Error:', error);
+        webClients.get(clientId)?.destroy().catch(console.error);
+        webClients.delete(clientId);
+        
         res.status(500).json({ 
             success: false, 
-            error: 'Pairing failed. Ensure number is correct and WhatsApp is active on device.'
+            error: error.message,
+            details: 'Failed to generate pairing code. Please try again.'
         });
     }
 });
 
-// ===== MESSAGE SENDING API =====
-app.post('/api/sendmessage', async (req, res) => {
-    const { number, message, type, mediaUrl, filename, caption } = req.body;
-    
-    if (!number || !/^\d{10,15}$/.test(number)) {
-        return res.status(400).json({ success: false, error: 'Invalid WhatsApp number' });
-    }
-
-    try {
-        const chatId = `${number}@c.us`;
-        
-        if (type === 'media' && mediaUrl) {
-            const media = await MessageMedia.fromUrl(mediaUrl, {
-                unsafeMime: true,
-                filename: filename || `file_${Date.now()}`
-            });
-            
-            await Gifted.sendMessage(chatId, media, { caption });
-            
-            // Set appropriate reaction based on file type
-            const extension = filename ? path.extname(filename).toLowerCase() : '';
-            const reactions = {
-                '.mp3': '🎧',
-                '.mp4': '🎬',
-                '.jpg': '🖼️',
-                '.png': '🖼️',
-                '.pdf': '📄',
-                '.doc': '📄',
-                '.docx': '📄',
-                '.xls': '📊',
-                '.xlsx': '📊',
-                '.zip': '🗄️'
-            };
-            
-            const reaction = reactions[extension] || '📎';
-            await Gifted.sendMessage(chatId, { react: { text: reaction, messageId: null }});
-            
-        } else if (message) {
-            await Gifted.sendMessage(chatId, message);
-        } else {
-            return res.status(400).json({ success: false, error: 'Message content required' });
-        }
-        
-        res.json({ success: true });
-    } catch (error) {
-        console.error('Message Sending Error:', error);
-        res.status(500).json({ success: false, error: 'Failed to send message' });
-    }
-});
 
 // ===== TERMINAL AUTHENTICATION =====
 function promptAuthMethod() {
@@ -432,6 +510,58 @@ gmd({
     await reply(`✅ Bot Mode Changed to: ${newMode}`);
 });
 
+
+// ===== MESSAGE SENDING API =====
+app.post('/api/sendmessage', async (req, res) => {
+    const { number, message, type, mediaUrl, filename, caption } = req.body;
+    
+    if (!number || !/^\d{10,15}$/.test(number)) {
+        return res.status(400).json({ success: false, error: 'Invalid WhatsApp number' });
+    }
+
+    try {
+        const chatId = `${number}@c.us`;
+        
+        if (type === 'media' && mediaUrl) {
+            const media = await MessageMedia.fromUrl(mediaUrl, {
+                unsafeMime: true,
+                filename: filename || `file_${Date.now()}`
+            });
+            
+            await Gifted.sendMessage(chatId, media, { caption });
+            
+            // Set appropriate reaction based on file type
+            const extension = filename ? path.extname(filename).toLowerCase() : '';
+            const reactions = {
+                '.mp3': '🎧',
+                '.mp4': '🎬',
+                '.jpg': '🖼️',
+                '.png': '🖼️',
+                '.pdf': '📄',
+                '.doc': '📄',
+                '.docx': '📄',
+                '.xls': '📊',
+                '.xlsx': '📊',
+                '.zip': '🗄️'
+            };
+            
+            const reaction = reactions[extension] || '📎';
+            await Gifted.sendMessage(chatId, { react: { text: reaction, messageId: null }});
+            
+        } else if (message) {
+            await Gifted.sendMessage(chatId, message);
+        } else {
+            return res.status(400).json({ success: false, error: 'Message content required' });
+        }
+        
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Message Sending Error:', error);
+        res.status(500).json({ success: false, error: 'Failed to send message' });
+    }
+});
+
+
 // Start everything
 app.listen(PORT, () => {
     console.log(`🌐 Web server running on port ${PORT}`);
@@ -443,8 +573,18 @@ process.on('SIGINT', async () => {
     console.log('\nShutting down...');
     await Gifted.sendMessage(`${OWNER_NUMBER}@c.us`, '🛑 Bot shutting down')
         .catch(console.error);
-    cleanupReadline();
-    if (activeClient) await activeClient.destroy();
+        
+    // Cleanup all web clients
+    for (const [clientId, client] of webClients) {
+        await client.destroy().catch(console.error);
+        webClients.delete(clientId);
+    }
+    
+    if (rl) {
+        rl.close();
+        rl.removeAllListeners();
+    }
+    
     await Gifted.destroy();
     process.exit(0);
 });
