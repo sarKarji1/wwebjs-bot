@@ -13,6 +13,12 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static('public'));
 
+// ===== GLOBAL STATE =====
+let activeAuthMethod = null; // 'terminal', 'web-qr', or 'web-pair'
+let terminalAuthAvailable = true;
+let webAuthAvailable = true;
+let isAuthenticated = false;
+
 // ===== CONFIGURATION =====
 const CONFIG = {
     PREFIX: ".",
@@ -68,10 +74,33 @@ let webClients = new Map();
 
 // ===== WEB AUTHENTICATION ENDPOINTS =====
 app.get('/', (req, res) => {
+    if (isAuthenticated) {
+        return res.send('API is Online');
+    }
+    if (activeAuthMethod && activeAuthMethod !== 'web') {
+        return res.status(403).send('Authentication already in progress via terminal');
+    }
+    activeAuthMethod = 'web';
+    terminalAuthAvailable = false;
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 app.post('/api/qr', async (req, res) => {
+    if (isAuthenticated) {
+        return res.status(403).json({ 
+            success: false, 
+            error: 'Already authenticated' 
+        });
+    }
+    if (activeAuthMethod && activeAuthMethod !== 'web-qr') {
+        return res.status(403).json({ 
+            success: false, 
+            error: 'Another authentication method is already in progress' 
+        });
+    }
+    
+    activeAuthMethod = 'web-qr';
+    terminalAuthAvailable = false;
     const clientId = `web-qr-${Date.now()}`;
     
     try {
@@ -103,11 +132,14 @@ app.post('/api/qr', async (req, res) => {
                 }
                 client.destroy().catch(console.error);
                 webClients.delete(clientId);
+                activeAuthMethod = null;
+                terminalAuthAvailable = true;
             }
         });
 
         client.on('authenticated', () => {
             console.log(`🔑 Client ${clientId} authenticated`);
+            isAuthenticated = true;
         });
 
         client.on('ready', () => {
@@ -116,6 +148,8 @@ app.post('/api/qr', async (req, res) => {
             Gifted.initialize().catch(console.error);
             client.destroy().catch(console.error);
             webClients.delete(clientId);
+            activeAuthMethod = null;
+            isAuthenticated = true;
         });
 
         client.on('auth_failure', (msg) => {
@@ -128,6 +162,9 @@ app.post('/api/qr', async (req, res) => {
             }
             client.destroy().catch(console.error);
             webClients.delete(clientId);
+            activeAuthMethod = null;
+            terminalAuthAvailable = true;
+            isAuthenticated = false;
         });
 
         await client.initialize();
@@ -141,15 +178,34 @@ app.post('/api/qr', async (req, res) => {
         }
         webClients.get(clientId)?.destroy().catch(console.error);
         webClients.delete(clientId);
+        activeAuthMethod = null;
+        terminalAuthAvailable = true;
+        isAuthenticated = false;
     }
 });
 
-// ===== WEB AUTHENTICATION ENDPOINTS =====
 app.post('/api/pair', async (req, res) => {
+    if (isAuthenticated) {
+        return res.status(403).json({ 
+            success: false, 
+            error: 'Already authenticated' 
+        });
+    }
+    if (activeAuthMethod && activeAuthMethod !== 'web-pair') {
+        return res.status(403).json({ 
+            success: false, 
+            error: 'Another authentication method is already in progress' 
+        });
+    }
+    
+    activeAuthMethod = 'web-pair';
+    terminalAuthAvailable = false;
     const { phoneNumber } = req.body;
     const clientId = `web-pair-${Date.now()}`;
     
     if (!phoneNumber || !/^\d{10,15}$/.test(phoneNumber)) {
+        activeAuthMethod = null;
+        terminalAuthAvailable = true;
         return res.status(400).json({ 
             success: false, 
             error: 'Valid phone number required (10-15 digits)' 
@@ -177,18 +233,17 @@ app.post('/api/pair', async (req, res) => {
 
         webClients.set(clientId, client);
 
-        // Enhanced initialization with progress tracking
         let isReady = false;
         const initTimeout = 60000; // 60 seconds timeout
         
         const initPromise = new Promise((resolve, reject) => {
-            // Track initialization progress
             client.on('loading_screen', (percent, message) => {
                 console.log(`Loading: ${percent}% ${message || ''}`);
             });
 
             client.on('authenticated', () => {
                 console.log('🔑 Client authenticated');
+                isAuthenticated = true;
             });
 
             client.on('auth_failure', msg => {
@@ -210,11 +265,9 @@ app.post('/api/pair', async (req, res) => {
             });
         });
 
-        // Start initialization
         await client.initialize();
         console.log('Client initialization started...');
 
-        // Wait for ready state with timeout
         await Promise.race([
             initPromise,
             new Promise((_, reject) => 
@@ -232,18 +285,22 @@ app.post('/api/pair', async (req, res) => {
             message: 'Enter this code in your WhatsApp linked devices section'
         });
 
-        // Handle post-pairing
         client.on('ready', () => {
             console.log('🌐 Paired session ready');
             Gifted.initialize().catch(console.error);
             client.destroy().catch(console.error);
             webClients.delete(clientId);
+            activeAuthMethod = null;
+            isAuthenticated = true;
         });
 
     } catch (error) {
         console.error('❌ Pairing Error:', error);
         webClients.get(clientId)?.destroy().catch(console.error);
         webClients.delete(clientId);
+        activeAuthMethod = null;
+        terminalAuthAvailable = true;
+        isAuthenticated = false;
         
         res.status(500).json({ 
             success: false, 
@@ -253,9 +310,13 @@ app.post('/api/pair', async (req, res) => {
     }
 });
 
-
 // ===== TERMINAL AUTHENTICATION =====
 function promptAuthMethod() {
+    if (!terminalAuthAvailable) {
+        console.log('\n⚠️ Terminal authentication is not available (web authentication in progress)');
+        return Promise.resolve(null);
+    }
+
     return new Promise((resolve) => {
         console.log('\nChoose Authentication Method:');
         console.log('1. QR Code');
@@ -265,27 +326,31 @@ function promptAuthMethod() {
             rl.question('Enter Choice (1/2): ', (answer) => {
                 const choice = answer.trim();
                 if (choice === '1' || choice === '2') {
+                    activeAuthMethod = 'terminal';
+                    webAuthAvailable = false;
                     resolve(choice === '2' ? 'pairing' : 'qr');
                 } else {
                     console.log('\n❌ Invalid choice. Please enter 1 or 2');
-                    askForChoice(); // Ask again
+                    askForChoice();
                 }
             });
         };
         
-        askForChoice(); // Start the prompt
+        askForChoice();
     });
 }
 
 Gifted.on('qr', async (qr) => {
     if (pairingCodeRequested) return;
+    if (activeAuthMethod && activeAuthMethod !== 'terminal') return;
 
     if (!authMethod && !process.env.AUTH_TYPE) {
         try {
             authMethod = await promptAuthMethod();
+            if (!authMethod) return; // Authentication not available
         } catch (error) {
             console.error('\nAuthentication method selection error:', error);
-            return; // Don't proceed with any authentication
+            return;
         }
     }
 
@@ -340,12 +405,17 @@ function showQrCode(qr) {
 
 Gifted.on('authenticated', () => {
     console.log('\n🔑 Logged In');
+    isAuthenticated = true;
     cleanupReadline();
 });
 
 Gifted.on('auth_failure', msg => {
     console.error('\nAUTH FAILURE:', msg);
     cleanupReadline();
+    activeAuthMethod = null;
+    terminalAuthAvailable = true;
+    webAuthAvailable = true;
+    isAuthenticated = false;
 });
 
 Gifted.on('ready', () => {
@@ -362,6 +432,10 @@ Gifted.on('ready', () => {
         .catch(console.error);
     
     cleanupReadline();
+    activeAuthMethod = null;
+    terminalAuthAvailable = true;
+    webAuthAvailable = true;
+    isAuthenticated = true;
 });
 
 function cleanupReadline() {
@@ -510,7 +584,6 @@ gmd({
     await reply(`✅ Bot Mode Changed to: ${newMode}`);
 });
 
-
 // ===== MESSAGE SENDING API =====
 app.post('/api/sendmessage', async (req, res) => {
     const { number, message, type, mediaUrl, filename, caption } = req.body;
@@ -528,26 +601,8 @@ app.post('/api/sendmessage', async (req, res) => {
                 filename: filename || `file_${Date.now()}`
             });
             
-            await Gifted.sendMessage(chatId, media, { caption });
-            
-            // Set appropriate reaction based on file type
-            const extension = filename ? path.extname(filename).toLowerCase() : '';
-            const reactions = {
-                '.mp3': '🎧',
-                '.mp4': '🎬',
-                '.jpg': '🖼️',
-                '.png': '🖼️',
-                '.pdf': '📄',
-                '.doc': '📄',
-                '.docx': '📄',
-                '.xls': '📊',
-                '.xlsx': '📊',
-                '.zip': '🗄️'
-            };
-            
-            const reaction = reactions[extension] || '📎';
-            await Gifted.sendMessage(chatId, { react: { text: reaction, messageId: null }});
-            
+            await Gifted.sendMessage(chatId, media, { caption });  
+
         } else if (message) {
             await Gifted.sendMessage(chatId, message);
         } else {
@@ -565,7 +620,9 @@ app.post('/api/sendmessage', async (req, res) => {
 // Start everything
 app.listen(PORT, () => {
     console.log(`🌐 Web server running on port ${PORT}`);
-    Gifted.initialize();
+    if (!activeAuthMethod) {
+        Gifted.initialize();
+    }
 });
 
 // Clean up on exit
