@@ -48,7 +48,7 @@ const Gifted = new Client({
     authStrategy: new LocalAuth({ dataPath: AUTH_PATH }),
     puppeteer: { 
         headless: true,
-        executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium-browser'
+        executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium-browser',
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -109,7 +109,7 @@ app.post('/api/qr', async (req, res) => {
             authStrategy: new LocalAuth({ clientId, dataPath: AUTH_PATH }),
             puppeteer: { 
                 headless: true,
-                executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium-browser'
+                executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium-browser',
                 args: ['--no-sandbox', '--disable-setuid-sandbox']
             }
         });
@@ -229,7 +229,7 @@ app.post('/api/pair', async (req, res) => {
                     '--no-zygote',
                     '--single-process'
                 ],
-                executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium-browser'
+                executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium-browser',
             }
         });
 
