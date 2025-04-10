@@ -48,7 +48,6 @@ const Gifted = new Client({
     authStrategy: new LocalAuth({ dataPath: AUTH_PATH }),
     puppeteer: { 
         headless: true,
-        executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium-browser',
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -109,7 +108,6 @@ app.post('/api/qr', async (req, res) => {
             authStrategy: new LocalAuth({ clientId, dataPath: AUTH_PATH }),
             puppeteer: { 
                 headless: true,
-                executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium-browser',
                 args: ['--no-sandbox', '--disable-setuid-sandbox']
             }
         });
@@ -229,14 +227,14 @@ app.post('/api/pair', async (req, res) => {
                     '--no-zygote',
                     '--single-process'
                 ],
-                executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium-browser',
+                executablePath: process.env.CHROME_PATH || undefined
             }
         });
 
         webClients.set(clientId, client);
 
         let isReady = false;
-        const initTimeout = 60000; // 60 seconds timeout
+        const initTimeout = 1200000; // 1 min seconds timeout
         
         const initPromise = new Promise((resolve, reject) => {
             client.on('loading_screen', (percent, message) => {
