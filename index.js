@@ -179,19 +179,23 @@ app.post('/api/sendmessage', async (req, res) => {
 // ===== TERMINAL AUTHENTICATION =====
 function promptAuthMethod() {
     return new Promise((resolve) => {
-        const timeout = setTimeout(() => {
-            console.log('\n⏰ No Selection Made, Defaulting to QR Code');
-            rl.close();
-            resolve('qr');
-        }, 60000);
-
         console.log('\nChoose Authentication Method:');
         console.log('1. QR Code');
         console.log('2. Pairing Code');
-        rl.question('Enter Choice (1/2): ', (answer) => {
-            clearTimeout(timeout);
-            resolve(answer.trim() === '2' ? 'pairing' : 'qr');
-        });
+        
+        const askForChoice = () => {
+            rl.question('Enter Choice (1/2): ', (answer) => {
+                const choice = answer.trim();
+                if (choice === '1' || choice === '2') {
+                    resolve(choice === '2' ? 'pairing' : 'qr');
+                } else {
+                    console.log('\n❌ Invalid choice. Please enter 1 or 2');
+                    askForChoice(); // Ask again
+                }
+            });
+        };
+        
+        askForChoice(); // Start the prompt
     });
 }
 
@@ -199,23 +203,48 @@ Gifted.on('qr', async (qr) => {
     if (pairingCodeRequested) return;
 
     if (!authMethod && !process.env.AUTH_TYPE) {
-        authMethod = await promptAuthMethod();
+        try {
+            authMethod = await promptAuthMethod();
+        } catch (error) {
+            console.error('\nAuthentication method selection error:', error);
+            return; // Don't proceed with any authentication
+        }
     }
 
     if (authMethod === 'pairing' || process.env.AUTH_TYPE === 'pairing-code') {
         console.log('\n🔑 Pairing Code Requested');
-        rl.question('Enter Your Phone Number (with country code, e.g. 254712345678): ', async (phoneNumber) => {
-            try {
-                const pairingCode = await Gifted.requestPairingCode(phoneNumber);
-                console.log(`\nPairing code: ${pairingCode}`);
-                console.log('Enter this Code in WhatsApp: Settings → Linked Devices');
-                pairingCodeRequested = true;
-            } catch (error) {
-                console.error('\nError Requesting Pairing Code:', error);
-                console.log('Falling Back to QR code...');
-                showQrCode(qr);
-            }
-        });
+        
+        const askForPhoneNumber = () => {
+            rl.question('Enter Your Phone Number (with country code, e.g. 254712345678): ', async (phoneNumber) => {
+                if (!/^\d{10,15}$/.test(phoneNumber)) {
+                    console.log('\n❌ Invalid phone number format. Please try again.');
+                    askForPhoneNumber();
+                    return;
+                }
+
+                try {
+                    const pairingCode = await Gifted.requestPairingCode(phoneNumber);
+                    console.log(`\nPairing code: ${pairingCode}`);
+                    console.log('Enter this Code in WhatsApp: Settings → Linked Devices');
+                    pairingCodeRequested = true;
+                } catch (error) {
+                    console.error('\nError Requesting Pairing Code:', error);
+                    console.log('\nWould you like to:');
+                    console.log('1. Try entering phone number again');
+                    console.log('2. Switch to QR code authentication');
+                    
+                    rl.question('Enter choice (1/2): ', (choice) => {
+                        if (choice.trim() === '2') {
+                            showQrCode(qr);
+                        } else {
+                            askForPhoneNumber();
+                        }
+                    });
+                }
+            });
+        };
+        
+        askForPhoneNumber();
     } else {
         showQrCode(qr);
     }
