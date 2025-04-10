@@ -102,7 +102,7 @@ app.post('/api/qr', async (req, res) => {
     
     activeAuthMethod = 'web-qr';
     terminalAuthAvailable = false;
-    const clientId = `web-qr-${Date.now()}`;
+    const clientId = `session`;
     
     try {
         const client = new Client({
@@ -203,7 +203,7 @@ app.post('/api/pair', async (req, res) => {
     activeAuthMethod = 'web-pair';
     terminalAuthAvailable = false;
     const { phoneNumber } = req.body;
-    const clientId = `web-pair-${Date.now()}`;
+    const clientId = `session`;
     
     if (!phoneNumber || !/^\d{10,15}$/.test(phoneNumber)) {
         activeAuthMethod = null;
