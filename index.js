@@ -28,7 +28,7 @@ const CONFIG = {
     ALLOWED_NUMBERS: process.env.ALLOWED_NUMBERS ? process.env.ALLOWED_NUMBERS.split(',') : []
 };
 
-// .ENV
+// .ENV //
 const BOT_NUMBER = process.env.BOT_NUMBER || "2547xxxxxxxx";
 const OWNER_NUMBER = process.env.OWNER_NUMBER || "2547xxxxxxxx";
 const AUTH_PATH = process.env.AUTH_PATH || './auth';
